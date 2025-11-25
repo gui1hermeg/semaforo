@@ -1,0 +1,154 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity semaforo_inteligente is
+    Port (
+        clk          : in  STD_LOGIC;
+        rst          : in  STD_LOGIC;
+        btn_pedestre : in  STD_LOGIC;
+
+        vermelho_v   : out STD_LOGIC;
+        amarelo_v    : out STD_LOGIC;
+        verde_v      : out STD_LOGIC;
+
+        vermelho_p   : out STD_LOGIC;
+        verde_p      : out STD_LOGIC
+    );
+end semaforo_inteligente;
+
+architecture Behavioral of semaforo_inteligente is
+
+    -- =============================================
+    -- Constantes e sinais (tudo ANTES do begin)
+    -- =============================================
+    constant CLK_FREQ            : integer := 50_000_000;
+    constant CLK_1HZ             : integer := 49;        -- SIMULAÇÃO RÁPIDA: 1 "segundo" = 1 µs
+
+    signal tick_1s               : std_logic := '0';
+    signal contador_seg          : integer range 0 to 60 := 0;
+
+    type state_type is (VEIC_VERDE, VEIC_AMARELO, PED_VERDE, PED_PISCANDO);
+    signal estado                : state_type := VEIC_VERDE;
+
+    signal btn_sync              : std_logic_vector(2 downto 0);
+    signal btn_pulse             : std_logic := '0';
+    signal pedido_pedestre       : std_logic := '0';
+
+    constant TEMPO_VERDE_NORMAL  : integer := 30;  -- 30 µs na simulação
+    constant TEMPO_VERDE_REDUZIDO: integer := 10;  -- 10 µs
+    signal   tempo_verde_max     : integer := TEMPO_VERDE_NORMAL;
+
+    signal meio_segundo          : std_logic := '0';   -- para piscar no estado PED_PISCANDO
+
+begin
+
+    -- =============================================
+    -- Gerador de tick de 1 µs (simulação rápida)
+    -- =============================================
+    process(clk)
+        variable cnt : integer range 0 to CLK_FREQ := 0;
+    begin
+        if rising_edge(clk) then
+            if cnt = CLK_1HZ then
+                cnt := 0;
+                tick_1s <= '1';
+            else
+                cnt := cnt + 1;
+                tick_1s <= '0';
+            end if;
+        end if;
+    end process;
+
+    -- =============================================
+    -- Sincronizador e detector de borda do botão
+    -- =============================================
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            btn_sync <= btn_sync(1 downto 0) & btn_pedestre;
+        end if;
+    end process;
+
+    btn_pulse <= '1' when btn_sync(2 downto 1) = "01" else '0';
+
+    -- =============================================
+    -- Flag de pedido do pedestre (uma vez por ciclo)
+    -- =============================================
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            pedido_pedestre <= '0';
+        elsif rising_edge(clk) then
+            if btn_pulse = '1' and estado /= PED_VERDE and estado /= PED_PISCANDO then
+                pedido_pedestre <= '1';
+            elsif estado = VEIC_AMARELO then
+                pedido_pedestre <= '0';
+            end if;
+        end if;
+    end process;
+
+    -- =============================================
+    -- Máquina de estados + contadores
+    -- =============================================
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            estado          <= VEIC_VERDE;
+            contador_seg    <= 0;
+            tempo_verde_max <= TEMPO_VERDE_NORMAL;
+        elsif rising_edge(clk) then
+            if tick_1s = '1' then
+                if contador_seg > 0 then
+                    contador_seg <= contador_seg - 1;
+                else
+                    case estado is
+                        when VEIC_VERDE =>
+                            contador_seg <= 5;
+                            estado       <= VEIC_AMARELO;
+                        when VEIC_AMARELO =>
+                            contador_seg <= 20;
+                            estado       <= PED_VERDE;
+                        when PED_VERDE =>
+                            contador_seg <= 5;
+                            estado       <= PED_PISCANDO;
+                        when PED_PISCANDO =>
+                            contador_seg    <= TEMPO_VERDE_NORMAL;
+                            tempo_verde_max <= TEMPO_VERDE_NORMAL;
+                            estado          <= VEIC_VERDE;
+                    end case;
+                end if;
+
+                -- Redução imediata do verde se houver pedido
+                if estado = VEIC_VERDE and pedido_pedestre = '1' then
+                    tempo_verde_max <= TEMPO_VERDE_REDUZIDO;
+                    if contador_seg > TEMPO_VERDE_REDUZIDO then
+                        contador_seg <= TEMPO_VERDE_REDUZIDO;
+                    end if;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- =============================================
+    -- Gerador de 0,5 Hz (piscar pedestre)
+    -- =============================================
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if tick_1s = '1' then
+                meio_segundo <= not meio_segundo;
+            end if;
+        end if;
+    end process;
+
+    -- =============================================
+    -- Saídas dos LEDs
+    -- =============================================
+	 verde_v     <= '1' when estado = VEIC_VERDE else '0';
+	 amarelo_v   <= '1' when estado = VEIC_AMARELO else '0';
+	 vermelho_v  <= '1' when (estado = PED_VERDE or estado = PED_PISCANDO) else '0';
+	 verde_p     <= '1' when estado = PED_VERDE else '0';
+	 vermelho_p  <= '1' when (estado = VEIC_VERDE or estado = VEIC_AMARELO or (estado = PED_PISCANDO and meio_segundo = '1')) else '0';
+
+end Behavioral;
